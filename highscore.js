@@ -1,6 +1,6 @@
-// Static build: the leaderboard is disabled until a server-side API is configured.
-// Never put Airtable credentials or other private keys in browser code.
-const LEADERBOARD_API = '';
+// This branch expects a same-origin server-side leaderboard route.
+// Keep Airtable credentials in deployment environment variables, never here.
+const LEADERBOARD_API = '/api/leaderboard';
 
 
 // ── Player name ──────────────────────────────────────────────────────────────
