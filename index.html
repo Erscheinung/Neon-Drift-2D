@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>NEON DRIFT</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #050010; overflow: hidden; font-family: 'Courier New', monospace; }
+    #game-canvas { display: block; width: 100vw; height: 100vh; touch-action: none; position: relative; z-index: 2; }
+
+    /* Procedural neon-city backdrop, drawn on its own canvas behind the game. */
+    #skyline-canvas {
+      position: fixed; inset: 0; width: 100vw; height: 100vh;
+      z-index: 0; display: block; pointer-events: none;
+    }
+
+    #ui-overlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none; z-index: 10;
+    }
+
+    #score-display {
+      position: absolute; top: 24px; right: 24px; text-align: right;
+      color: #00ffff; text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff;
+    }
+    #score-display .score { font-size: 32px; font-weight: bold; letter-spacing: 2px; }
+    #score-display .distance { font-size: 14px; opacity: 0.7; margin-top: 2px; }
+
+    #combo-display {
+      position: absolute; top: 24px; left: 24px;
+      color: #ff00cc; text-shadow: 0 0 10px #ff00cc, 0 0 20px #ff00cc;
+      transition: transform 0.1s;
+    }
+    #combo-display .multiplier { font-size: 28px; font-weight: bold; }
+    #combo-display .combo-label { font-size: 12px; opacity: 0.8; letter-spacing: 3px; text-transform: uppercase; }
+    #combo-display.pulse { transform: scale(1.3); }
+
+    #fuel-bar {
+      width: 96px; height: 6px; margin-top: 6px;
+      border: 1px solid rgba(0, 229, 255, 0.6);
+      border-radius: 3px; overflow: hidden;
+      background: rgba(0, 229, 255, 0.08);
+      box-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
+    }
+    #fuel-fill {
+      width: 100%; height: 100%;
+      background: #00e5ff; box-shadow: 0 0 10px #00e5ff;
+      transition: width 0.12s linear, background 0.2s;
+    }
+    #fuel-bar.low #fuel-fill { background: #ff00cc; box-shadow: 0 0 10px #ff00cc; }
+
+    #flip-counter {
+      position: absolute; top: 80px; left: 24px;
+      color: #ffff00; text-shadow: 0 0 8px #ffff00;
+      font-size: 18px; opacity: 0;
+      transition: opacity 0.2s;
+    }
+    #flip-counter.show { opacity: 1; }
+
+    #milestone-banner {
+      position: absolute; top: 34%; left: 50%; transform: translate(-50%, -50%) scale(0.8);
+      color: #00ffff; text-shadow: 0 0 16px #00ffff, 0 0 32px #9945ff;
+      font-size: clamp(24px, 5vw, 44px); font-weight: bold; letter-spacing: 4px;
+      text-transform: uppercase; opacity: 0; pointer-events: none;
+      white-space: nowrap; max-width: 90vw;
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    #milestone-banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+    .screen {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(5, 0, 16, 0.85); z-index: 20;
+      pointer-events: all;
+      /* Stop Safari from treating the game gesture as page zoom/scroll. */
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .screen h1 {
+      font-size: clamp(36px, 8vw, 72px); letter-spacing: 8px;
+      color: #00ffff; text-shadow: 0 0 20px #00ffff, 0 0 40px #00ffff, 0 0 80px #9945ff;
+      margin-bottom: 16px;
+    }
+    .screen .subtitle {
+      font-size: clamp(12px, 2vw, 16px); color: #9945ff; letter-spacing: 4px;
+      text-transform: uppercase; margin-bottom: 48px;
+    }
+    .screen .cta {
+      font-size: clamp(14px, 2.5vw, 18px); color: #ff00cc;
+      text-shadow: 0 0 10px #ff00cc; letter-spacing: 3px;
+      animation: blink 1.2s ease-in-out infinite;
+    }
+    .screen .final-score {
+      font-size: clamp(24px, 5vw, 48px); color: #ffff00;
+      text-shadow: 0 0 15px #ffff00; margin-bottom: 8px;
+    }
+    .screen .best-score {
+      font-size: 14px; color: #9945ff; letter-spacing: 2px; margin-bottom: 4px;
+    }
+    .screen .global-best {
+      font-size: 13px; color: rgba(0,255,255,0.55); letter-spacing: 2px; margin-bottom: 36px;
+    }
+
+    .hint-row {
+      position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+      color: rgba(153, 69, 255, 0.5); font-size: 12px; letter-spacing: 2px;
+      white-space: nowrap;
+    }
+
+    #start-name-input {
+      width: min(320px, 80vw); padding: 10px 12px; margin-bottom: 28px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(0,255,255,0.3); color: #00ffff;
+      font-family: 'Courier New', monospace; font-size: 15px; letter-spacing: 2px;
+      text-transform: uppercase; text-align: center; outline: none;
+      pointer-events: all;
+    }
+    #start-name-input::placeholder { color: rgba(0,255,255,0.3); letter-spacing: 2px; }
+    #start-name-input:focus { border-color: #00ffff; box-shadow: 0 0 8px rgba(0,255,255,0.3); }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.3; }
+    }
+
+    #start-screen { display: flex; }
+    #death-screen  { display: none; }
+
+    /* ── Highscore modal ──────────────────────────────────────────── */
+    #hs-modal {
+      display: none; position: fixed; inset: 0; z-index: 30;
+      align-items: center; justify-content: center;
+      background: rgba(5, 0, 16, 0.88);
+    }
+    #hs-inner {
+      width: min(420px, 90vw); padding: 32px 28px;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid rgba(0, 255, 255, 0.25);
+      box-shadow: 0 0 32px rgba(0, 255, 255, 0.15), 0 0 80px rgba(153, 69, 255, 0.1);
+    }
+    #hs-title {
+      font-size: 22px; letter-spacing: 6px; color: #00ffff;
+      text-shadow: 0 0 12px #00ffff; margin-bottom: 6px; text-align: center;
+    }
+    #hs-new-score {
+      font-size: 36px; font-weight: bold; color: #ffff00;
+      text-shadow: 0 0 16px #ffff00; text-align: center; margin-bottom: 20px;
+      letter-spacing: 2px;
+    }
+    #hs-list {
+      list-style: none; margin-bottom: 24px; max-height: 240px; overflow-y: auto;
+    }
+    #hs-list li {
+      display: flex; align-items: center; padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      font-size: 13px; color: rgba(255,255,255,0.65);
+    }
+    #hs-list li.hs-highlight { color: #00ffff; text-shadow: 0 0 8px #00ffff; }
+    #hs-list .hs-rank { width: 24px; color: #9945ff; flex-shrink: 0; }
+    #hs-list .hs-name { flex: 1; letter-spacing: 1px; text-transform: uppercase; }
+    #hs-list .hs-pts  { font-weight: bold; letter-spacing: 1px; }
+    #hs-list .hs-empty { color: rgba(255,255,255,0.3); font-size: 12px; text-align: center; padding: 12px 0; }
+    #hs-prompt {
+      font-size: 11px; letter-spacing: 3px; color: #9945ff;
+      margin-bottom: 12px; text-align: center;
+    }
+    #hs-name-input {
+      width: 100%; padding: 10px 12px; background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(0,255,255,0.3); color: #00ffff;
+      font-family: 'Courier New', monospace; font-size: 16px; letter-spacing: 2px;
+      text-transform: uppercase; outline: none; margin-bottom: 12px;
+      text-align: center;
+    }
+    #hs-name-input::placeholder { color: rgba(0,255,255,0.3); }
+    #hs-name-input:focus { border-color: #00ffff; box-shadow: 0 0 8px rgba(0,255,255,0.3); }
+    #hs-buttons { display: flex; gap: 10px; }
+    #hs-buttons button {
+      flex: 1; padding: 10px; font-family: 'Courier New', monospace;
+      font-size: 13px; letter-spacing: 3px; cursor: pointer;
+      border: 1px solid; background: transparent; transition: all 0.15s;
+    }
+    #hs-submit { color: #00ffff; border-color: #00ffff; }
+    #hs-submit:hover:not(:disabled) { background: rgba(0,255,255,0.15); }
+    #hs-submit:disabled { opacity: 0.4; cursor: default; }
+    #hs-skip   { color: #9945ff; border-color: #9945ff; }
+    #hs-skip:hover { background: rgba(153,69,255,0.15); }
+    #hs-saved {
+      text-align: center; color: #00ffff; font-size: 12px;
+      letter-spacing: 3px; padding: 8px 0 14px;
+      text-shadow: 0 0 8px #00ffff;
+    }
+    #hs-play-again {
+      width: 100%; padding: 12px; font-family: 'Courier New', monospace;
+      font-size: 13px; font-weight: bold; letter-spacing: 3px; cursor: pointer;
+      color: #00ffff; border: 1px solid #00ffff; background: rgba(0,255,255,0.08);
+      touch-action: manipulation; -webkit-appearance: none; appearance: none;
+    }
+    #hs-play-again:active { background: rgba(0,255,255,0.25); transform: scale(0.98); }
+  </style>
+</head>
+<body>
+  <canvas id="skyline-canvas"></canvas>
+  <canvas id="game-canvas"></canvas>
+
+  <div id="ui-overlay">
+    <div id="score-display">
+      <div class="score" id="score-value">0</div>
+      <div class="distance" id="dist-value">0m</div>
+    </div>
+    <div id="combo-display">
+      <div class="multiplier" id="mult-value">x1</div>
+      <div class="combo-label" id="combo-label">COMBO</div>
+      <div id="fuel-bar"><div id="fuel-fill"></div></div>
+    </div>
+    <div id="flip-counter" id="flip-label">FLIP!</div>
+    <div id="milestone-banner"></div>
+  </div>
+
+  <div id="start-screen" class="screen">
+    <h1>NEON DRIFT</h1>
+    <div class="subtitle">Neon City Endless Runner</div>
+    <div class="best-score" id="start-best-label">BEST: 000000</div>
+    <div class="global-best" id="start-global-label"></div>
+    <input id="start-name-input" type="text" maxlength="20" placeholder="ENTER NAME / INITIALS" autocomplete="off" spellcheck="false" />
+    <div class="cta">PRESS SPACE OR TAP TO START</div>
+    <div class="hint-row">TAP = BOOST &nbsp;|&nbsp; HOLD = GLIDE &nbsp;|&nbsp; RELEASE = DIVE &nbsp;|&nbsp; FLIP + LAND = COMBO</div>
+  </div>
+
+  <div id="death-screen" class="screen">
+    <h1>CRASHED</h1>
+    <div class="final-score" id="death-score">0</div>
+    <div class="best-score" id="best-score-label">YOUR BEST: 0</div>
+    <div class="global-best" id="death-global-label"></div>
+    <div class="cta">PRESS SPACE OR TAP TO RETRY</div>
+  </div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
