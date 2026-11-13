@@ -1,6 +1,6 @@
 // ============================================================
 // NEON DRIFT — WEBAUDIO SYNTH MODULE
-// Synth-only. No external assets. Lazy AudioContext (autoplay-safe).
+// Synth SFX and looping music. Lazy audio initialization (autoplay-safe).
 // ============================================================
 
 // ------------------------------------------------------------
@@ -29,6 +29,39 @@ let master   = null;   // master GainNode -> limiter -> destination
 let limiter  = null;   // WaveShaper acting as a soft-clip safety net
 let noiseBuf = null;   // shared white-noise buffer for the crash burst
 let muted    = false;
+let music    = null;
+
+// Prepare the streaming player on the menu, not on the first gameplay input.
+// Audio failures must never prevent the controls or game state from updating.
+function prepareMusic() {
+  if (music) return;
+  try {
+    music = new Audio(new URL('./assets/music/staccato-time.ogg', import.meta.url).href);
+    music.preload = 'auto';
+    music.loop = true;
+    music.volume = 0.35;
+    music.muted = muted;
+  } catch {
+    music = null;
+  }
+}
+
+prepareMusic();
+
+// Reuse one player across retries so tracks can never overlap.
+function playMusic() {
+  if (!music || !music.paused) return;
+  // A blocked playback attempt must not interrupt gameplay.
+  try {
+    music.play()?.catch(() => {});
+  } catch {
+    // Some embedded browsers throw synchronously when audio is unavailable.
+  }
+}
+
+function pauseMusic() {
+  if (music) music.pause();
+}
 
 // Soft-clip curve: linear until LIMIT_THRESH, then compress toward +/-1 with
 // tanh so simultaneous SFX peaks fold gracefully instead of hard-clipping.
@@ -247,12 +280,17 @@ function playable() {
 // Call from the first user input. Creates + resumes the context so subsequent
 // SFX are audible (autoplay policy requires a gesture-driven resume).
 function unlock() {
-  ensureContext();
-  if (ctx && ctx.state === 'suspended') ctx.resume();
+  try {
+    ensureContext();
+    if (ctx && ctx.state === 'suspended') ctx.resume()?.catch(() => {});
+  } catch {
+    // Sound is optional; input and gameplay must still work without it.
+  }
 }
 
 function setMuted(value) {
   muted = !!value;
+  if (music) music.muted = muted;
   if (master) master.gain.value = muted ? 0 : MASTER_GAIN;
   return muted;
 }
@@ -263,6 +301,8 @@ function isMuted() {
 
 const audio = {
   unlock,
+  playMusic,
+  pauseMusic,
   boost,
   land,
   combo,

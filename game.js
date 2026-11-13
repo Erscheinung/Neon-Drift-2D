@@ -2,6 +2,12 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.m
 import audio from './audio.js';
 import { showLeaderboard, closeLeaderboard, fetchGlobalBest, setLeaderboardPlayAgainHandler, getPlayerName, setPlayerName } from './highscore.js';
 import { initSkyline } from './skyline.js';
+import { createRun, tickRun, recordLanding, districtBlend, DISTRICTS } from './progression.mjs';
+import { createDistricts } from './districts.js';
+const drawDistricts = createDistricts();
+let run = createRun();
+let riderRecord = 0;
+try { riderRecord = Number(localStorage.getItem('neondrift_rider_seconds')) || 0; } catch {}
 
 // ============================================================
 // SECTION 1: CONSTANTS & CONFIG
@@ -50,9 +56,9 @@ const SHARD_BOB_AMP    = 0.18;
 const SHARD_BOB_SPEED  = 2.2;
 
 const COLOR_PHASES = [
-  { zone: 'NEON SPRAWL', sky: new THREE.Color(0x050010), spireLine: new THREE.Color(0x6600cc), platformLine: new THREE.Color(0x9945ff), fogColor: new THREE.Color(0x330066), bikeColor: new THREE.Color(0x00ffff) },
-  { zone: 'CYAN DELTA',  sky: new THREE.Color(0x001515), spireLine: new THREE.Color(0x00cccc), platformLine: new THREE.Color(0x00ffcc), fogColor: new THREE.Color(0x003333), bikeColor: new THREE.Color(0x00ffcc) },
-  { zone: 'MAGENTA CORE', sky: new THREE.Color(0x150010), spireLine: new THREE.Color(0xcc00cc), platformLine: new THREE.Color(0xff00cc), fogColor: new THREE.Color(0x330033), bikeColor: new THREE.Color(0xff00cc) },
+  { zone: 'PRECISION SKYLINE', sky: new THREE.Color(0x050010), spireLine: new THREE.Color(0x6600cc), platformLine: new THREE.Color(0x9945ff), fogColor: new THREE.Color(0x330066), bikeColor: new THREE.Color(0x00ffff) },
+  { zone: 'STORMLINE TRANSIT',  sky: new THREE.Color(0x001515), spireLine: new THREE.Color(0x00cccc), platformLine: new THREE.Color(0x00ffcc), fogColor: new THREE.Color(0x003333), bikeColor: new THREE.Color(0x00ffcc) },
+  { zone: 'REACTOR CANOPY', sky: new THREE.Color(0x150010), spireLine: new THREE.Color(0xcc00cc), platformLine: new THREE.Color(0xff00cc), fogColor: new THREE.Color(0x330033), bikeColor: new THREE.Color(0xff00cc) },
 ];
 
 // Distance (m) between color-phase advances; palette tracks progress. The 30s
@@ -221,6 +227,15 @@ function buildBike() {
   coreLoop.scale.set(0.9, 0.9, 1);
   group.add(coreLoop);
 
+  // Fine segmented panels and vector vanes stay within the established silhouette.
+  const panelGeo = new THREE.BufferGeometry();
+  panelGeo.setAttribute('position', new THREE.Float32BufferAttribute([
+    -.65,.08,.02, -.35,.21,.02, -.35,.21,.02, -.12,.21,.02,
+    -.12,.21,.02, -.05,.08,.02, .12,.24,.02, .35,.24,.02,
+    -.65,-.08,.02, -.42,-.2,.02, .4,-.12,.02, .65,-.05,.02,
+  ], 3));
+  group.add(new THREE.LineSegments(panelGeo, new THREE.LineBasicMaterial({color: 0x87d6ff, transparent:true, opacity:.65})));
+
   // Wheels
   for (const [x, y] of [[-0.4, -0.3], [0.4, -0.3]]) {
     const ring = new THREE.RingGeometry(0.18, 0.22, 12);
@@ -317,6 +332,12 @@ function buildPlatform(width) {
     capMats.push(capMat);
   }
 
+  const ribs = [];
+  for (let x = -width / 2 + .35; x < width / 2; x += .5) ribs.push(x, -.16, .42, x + .12, .08, .42);
+  ribs.push(-width / 2, -.1, .43, width / 2, -.1, .43);
+  const ribGeo = new THREE.BufferGeometry();
+  ribGeo.setAttribute('position', new THREE.Float32BufferAttribute(ribs, 3));
+  group.add(new THREE.LineSegments(ribGeo, new THREE.LineBasicMaterial({ color: 0x7755bb, transparent: true, opacity: .6 })));
   group.userData.lineMat   = lineMat;
   group.userData.topGlow   = topGlowMesh.material;
   group.userData.railMat   = railMesh.material;
@@ -530,8 +551,7 @@ const input = {
 window.addEventListener('keydown', e => {
   if (e.code === 'Space') {
     e.preventDefault();
-    if (!e.repeat) input.justPressed = true; // fresh press, not OS auto-repeat
-    input.held = true;
+    if (!e.repeat) pressGameControl(e); // start audio inside the user gesture
   }
 });
 window.addEventListener('keyup', e => {
@@ -547,7 +567,8 @@ window.addEventListener('keyup', e => {
 // also makes this a game gesture instead of a browser zoom/scroll gesture.
 function pressGameControl(event) {
   event.preventDefault();
-  if (event.pointerId != null && event.currentTarget?.setPointerCapture) {
+  // Only capture on the canvas: launch overlays are hidden during this press.
+  if (event.pointerId != null && event.currentTarget === canvas) {
     event.currentTarget.setPointerCapture(event.pointerId);
   }
   input.justPressed = true;
@@ -561,12 +582,15 @@ function pressGameControl(event) {
 }
 
 function releaseGameControl(event) {
-  if (event) event.preventDefault();
   input.held = false;
   input.justReleased = true;
 }
 
 function bindGameControls(element) {
+  element.addEventListener('contextmenu', event => {
+    if (event.target.closest('input, textarea, [contenteditable="true"]')) return;
+    event.preventDefault();
+  });
   if (window.PointerEvent) {
     element.addEventListener('pointerdown', pressGameControl, { passive: false });
     element.addEventListener('pointerup', releaseGameControl, { passive: false });
@@ -581,6 +605,17 @@ function bindGameControls(element) {
 }
 
 bindGameControls(canvas);
+
+// Releases can land outside the canvas or on an overlay that was just hidden.
+window.addEventListener('pointerup', releaseGameControl);
+window.addEventListener('pointercancel', releaseGameControl);
+window.addEventListener('touchend', releaseGameControl, { passive: false });
+window.addEventListener('touchcancel', releaseGameControl, { passive: false });
+canvas.addEventListener('lostpointercapture', releaseGameControl);
+window.addEventListener('blur', () => {
+  input.held = false;
+  consumeInput();
+});
 
 function consumeInput() {
   input.justPressed  = false;
@@ -672,9 +707,14 @@ function spawnPlatform() {
 
   // Rebuild geometry to match new width
   const oldGroup = p.group;
-  while (oldGroup.children.length) oldGroup.remove(oldGroup.children[0]);
+  while (oldGroup.children.length) {
+    const child = oldGroup.children[0];
+    child.geometry?.dispose();
+    child.material?.dispose();
+    oldGroup.remove(child);
+  }
   const fresh = buildPlatform(w);
-  fresh.children.forEach(c => oldGroup.add(c));
+  while (fresh.children.length) oldGroup.add(fresh.children[0]);
   oldGroup.userData = fresh.userData;
 
   p.width    = w;
@@ -719,9 +759,14 @@ function spawnStarter() {
   if (!p) return 1;
 
   const oldGroup = p.group;
-  while (oldGroup.children.length) oldGroup.remove(oldGroup.children[0]);
+  while (oldGroup.children.length) {
+    const child = oldGroup.children[0];
+    child.geometry?.dispose();
+    child.material?.dispose();
+    oldGroup.remove(child);
+  }
   const fresh = buildPlatform(w);
-  fresh.children.forEach(c => oldGroup.add(c));
+  while (fresh.children.length) oldGroup.add(fresh.children[0]);
   oldGroup.userData = fresh.userData;
 
   const startY = 1;
@@ -745,10 +790,12 @@ function pickObstacle(d) {
   const type    = wantDrone ? 'drone' : 'laser';
   const variant = wantDrone ? (wantHard ? 'track' : 'patrol')
                             : (wantHard ? 'sweep' : 'blink');
+  // Retire only the red patrol box; leave its slot empty rather than increasing other hazards.
+  if (variant === 'patrol') return null;
   // Try exact match first, then any of the same base type, then anything left.
   let idx = obstaclePool.findIndex(o => o.type === type && o.variant === variant);
-  if (idx < 0) idx = obstaclePool.findIndex(o => o.type === type);
-  if (idx < 0) idx = obstaclePool.length - 1;
+  if (idx < 0) idx = obstaclePool.findIndex(o => o.type === type && o.variant !== 'patrol');
+  if (idx < 0) idx = obstaclePool.findIndex(o => o.variant !== 'patrol');
   if (idx < 0) return null;
   return obstaclePool.splice(idx, 1)[0];
 }
@@ -1005,6 +1052,8 @@ function refillBoostFuel(amount) {
 function awardLandingCombo() {
   const flips = pendingLandingFlips;
   pendingLandingFlips = 0;
+  if (physics._landedThisFrame && flips > 0) recordLanding(run, flips);
+  else if (physics._landedThisFrame && physics._landImpact < -2) recordLanding(run, 0);
   if (flips <= 0) return;
 
   score.combo += flips;
@@ -1370,7 +1419,7 @@ const _colorB = new THREE.Color();
 function advanceZone() {
   colorState.phase = (colorState.phase + 1) % 3;
   colorState.t     = 0;
-  showZone(COLOR_PHASES[colorState.phase].zone);
+  // District identity follows active play time; distance banners remain separate.
 }
 
 function updateColorCycle(delta) {
@@ -1476,6 +1525,9 @@ function updateMilestone(delta) {
 let comboEl = document.getElementById('combo-display');
 
 function updateUI() {
+  document.getElementById('run-time').textContent = `${Math.floor(run.seconds)}s • ${run.streak}/3 FLIP LANDINGS`;
+  document.getElementById('district-name').textContent = DISTRICTS[districtBlend(run.seconds).phase];
+  document.getElementById('run-message').textContent = run.messageTime > 0 ? run.message : (riderRecord ? `RIDER RECORD: ${riderRecord}s` : 'LAND 3 FLIP JUMPS IN A ROW');
   elScore.textContent = Math.floor(score.points).toString().padStart(6, '0');
   elDist.textContent  = Math.floor(score.distance) + 'm';
   elMult.textContent  = 'x' + score.multiplier;
@@ -1541,13 +1593,18 @@ function startGame() {
   }
   closeLeaderboard();
   audio.unlock();
+  audio.playMusic();
   startScreen.style.display = 'none';
   deathScreen.style.display = 'none';
   deathLockout = 0;
   gamePhase = 'PLAYING';
+  paused = document.hidden;
   resetWorld();
   resetScore();
+  run = createRun();
+  updateUI();
   consumeInput();
+  lastTime = performance.now();
 }
 
 // The score modal sits above the retry screen, so its Play Again button must
@@ -1557,6 +1614,7 @@ setLeaderboardPlayAgainHandler(startGame);
 function triggerDeath() {
   if (gamePhase !== 'PLAYING') return;
   gamePhase = 'DEAD';
+  audio.pauseMusic();
   triggerShake(0.7);
   // Dramatic multi-color death explosion: big fast spread + white-hot flash.
   triggerBurst(1.8, { deadly: true });
@@ -1632,12 +1690,25 @@ function resetWorld() {
 // ============================================================
 
 let lastTime = 0;
-let paused   = false;
+let paused   = document.hidden;
+function syncPause() {
+  paused = document.hidden || !document.hasFocus();
+  input.held = false; consumeInput();
+  lastTime = performance.now();
+  if (paused) audio.pauseMusic();
+  else if (gamePhase === 'PLAYING') audio.playMusic();
+}
+window.addEventListener('blur', syncPause);
+window.addEventListener('focus', syncPause);
 
 // Pause when the tab is hidden; reset the clock on resume so the first frame
 // delta doesn't spike from the wall-time spent away.
 document.addEventListener('visibilitychange', () => {
-  paused = document.hidden;
+  paused = document.hidden || !document.hasFocus();
+  input.held = false;
+  consumeInput();
+  if (paused) audio.pauseMusic();
+  else if (gamePhase === 'PLAYING') audio.playMusic();
   if (!paused) lastTime = performance.now();
 });
 
@@ -1697,7 +1768,14 @@ function update(delta) {
   updatePhysics(delta);
   updateWorld(delta);
   checkCollisions();
+  if (gamePhase !== 'PLAYING') return;
   awardLandingCombo();
+  const reached = tickRun(run, delta, !paused);
+  if (reached) {
+    audio.milestone();
+    riderRecord = Math.max(riderRecord, reached);
+    try { localStorage.setItem('neondrift_rider_seconds', String(riderRecord)); } catch {}
+  }
   updateScore(delta);
   emitTrail();            // emit before update so newly-spawned particles render this frame
   updateParticles(delta);
@@ -1751,6 +1829,7 @@ function gameLoop(timestamp) {
   lastTime       = timestamp;
   const delta    = Math.min(rawDelta, 0.1);
   update(delta);
+  drawDistricts(run.seconds, totalDistance);
   renderer.render(scene, camera);
 }
 
