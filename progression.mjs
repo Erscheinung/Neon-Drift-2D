@@ -22,8 +22,8 @@ export function recordLanding(run, flips) {
   }
 }
 export function districtBlend(seconds) {
-  const phase = Math.floor(seconds / 30) % 3;
-  const blend = Math.max(0, (seconds % 30 - 24) / 6);
+  const phase = Math.floor(seconds / 7) % 3;
+  const blend = Math.max(0, (seconds % 7 - 5) / 2);
   const weights = [0, 0, 0];
   weights[phase] = 1 - blend;
   weights[(phase + 1) % 3] = blend;

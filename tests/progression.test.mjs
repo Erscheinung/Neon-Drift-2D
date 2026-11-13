@@ -18,11 +18,16 @@ test('landing challenge resets on non-flip landing without changing scores', () 
   recordLanding(run,0); assert.equal(run.streak,0); assert.equal(run.bestStreak,3);
 });
 test('district transitions are continuous, normalized and cyclic', () => {
-  for(const t of [0,24,27,29.99,30,59.99,60,89.99,90]) {
+  for(const t of [0,5,6,6.99,7,13.99,14,20.99,21]) {
     const {weights}=districtBlend(t);
     assert.ok(weights.every(w=>w>=0 && w<=1));
     assert.ok(Math.abs(weights.reduce((a,b)=>a+b,0)-1)<1e-10);
   }
-  assert.deepEqual(districtBlend(27).weights,[.5,.5,0]);
-  assert.deepEqual(districtBlend(90).weights,[1,0,0]);
+  assert.deepEqual(districtBlend(6).weights,[.5,.5,0]);
+  assert.deepEqual(districtBlend(21).weights,[1,0,0]);
+});
+
+test('districts arrive at seven and fourteen active seconds', () => {
+  assert.equal(districtBlend(7).phase, 1);
+  assert.equal(districtBlend(14).phase, 2);
 });

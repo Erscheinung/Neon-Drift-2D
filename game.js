@@ -1100,7 +1100,7 @@ const trailGeo  = new THREE.BufferGeometry();
 trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
 trailGeo.setAttribute('color',    new THREE.BufferAttribute(trailColors, 3));
 const trailMat  = new THREE.PointsMaterial({
-  size: 0.18, vertexColors: true, transparent: true,
+  size: 0.23, map: softDotTexture, vertexColors: true, transparent: true,
   blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
 });
 const trailSystem = new THREE.Points(trailGeo, trailMat);
@@ -1193,6 +1193,8 @@ function emitThrust() {
   }
 }
 
+const TRAIL_PALETTE = [[0.02, 1, 1], [0.3, 0.45, 1], [0.65, 0.12, 1], [1, 0.04, 0.65]];
+let trailHueIndex = 0;
 function emitTrail() {
   const speedFactor = (scrollSpeed + physics.forwardBonus) / INITIAL_SCROLL;
   // World always scrolls (the bike is always running), so always shed a trail —
@@ -1207,6 +1209,8 @@ function emitTrail() {
       p.x       = BIKE_SCREEN_X - 0.7 - Math.random() * 0.3;
       p.y       = physics.y - 0.12 + (Math.random() - 0.5) * 0.18;
       p.z       = 0;
+      const hue = TRAIL_PALETTE[Math.floor(trailHueIndex++ / 3) % TRAIL_PALETTE.length];
+      [p.r, p.g, p.b] = hue;
       // Strong leftward velocity so particles stream behind and clear the frame
       // quickly rather than lingering as a cloud around the bike.
       p.vx      = -(6 + Math.random() * 4) * speedFactor;
@@ -1278,10 +1282,11 @@ function updateParticles(delta) {
       trailPositions[tIdx + 1] = -9999;
       trailPositions[tIdx + 2] = 0;
     }
-    // cyan → magenta as life decays
-    trailColors[tIdx]     = (1 - t) * t;
-    trailColors[tIdx + 1] = t * t;
-    trailColors[tIdx + 2] = t;
+    // Saturated neon packets fade without bleaching into white squares.
+    const fade = Math.sqrt(t);
+    trailColors[tIdx]     = p.r * fade;
+    trailColors[tIdx + 1] = p.g * fade;
+    trailColors[tIdx + 2] = p.b * fade;
     tIdx += 3;
   }
   trailGeo.attributes.position.needsUpdate = true;
@@ -1423,15 +1428,10 @@ function advanceZone() {
 }
 
 function updateColorCycle(delta) {
-  // Palette advances on distance so it tracks progress. The timer is a fallback
-  // that only fires if the player somehow stalls without covering ground.
-  if (score.distance >= nextZoneDist) {
-    nextZoneDist += ZONE_DISTANCE;
-    advanceZone();
-  } else {
-    colorState.t += delta / COLOR_PHASE_DUR;
-    if (colorState.t >= 1) advanceZone();
-  }
+  // Match foreground palette to the same seven-second district clock.
+  const district = districtBlend(run.seconds);
+  colorState.phase = district.phase;
+  colorState.t = district.weights[(district.phase + 1) % 3];
 
   const phaseA = COLOR_PHASES[colorState.phase];
   const phaseB = COLOR_PHASES[(colorState.phase + 1) % 3];

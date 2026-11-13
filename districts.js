@@ -16,17 +16,7 @@ export function createDistricts() {
     ctx.clearRect(0, 0, width, height);
     const { weights } = districtBlend(seconds);
     ctx.lineWidth = 1;
-    // Precision architecture remains beneath every district.
-    ctx.strokeStyle = '#9955dd'; ctx.globalAlpha = .32;
-    ctx.beginPath();
-    for (let i = 0; i < 12; i++) {
-      const x = ((i * 173 - distance * 8) % (width + 200) + width + 200) % (width + 200) - 100;
-      const y = height * (.22 + (i % 4) * .055);
-      line(x, y + 35, x, y); line(x - 9, y + 12, x + 9, y + 12);
-      line(x - 13, y + 35, x + 13, y + 35);
-      ctx.moveTo(x + 25, y + 20); ctx.arc(x + 25, y + 20, 10, 0, Math.PI);
-    }
-    ctx.stroke();
+    // Rooftop details belong to skyline buildings, never detached screen-space glyphs.
     const storm = weights[1];
     ctx.globalAlpha = storm * .035; ctx.fillStyle = '#76b8ff';
     for (let i = 0; i < 3; i++) {
