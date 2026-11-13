@@ -79,7 +79,7 @@ const SWEEP_ARC        = 0.7;   // radians of half-swing for a sweeping laser
 
 const canvas   = document.getElementById('game-canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x050010, 0); // transparent: CSS skyline shows through
 
@@ -328,6 +328,7 @@ function buildPlatform(width) {
     const capMat = makeGlowMaterial(0x00e5ff, 0.9);
     const cap = new THREE.Mesh(capGeo, capMat);
     cap.position.set(sign * width / 2, 0, 0.42);
+    cap.userData.endSign = sign;
     group.add(cap);
     capMats.push(capMat);
   }
@@ -343,6 +344,15 @@ function buildPlatform(width) {
   group.userData.railMat   = railMesh.material;
   group.userData.capMats   = capMats;
   return group;
+}
+
+// Reuse the pool's five-unit meshes; preserve cap thickness and exact deck bounds.
+function resizePlatform(group, width) {
+  const scale = width / 5;
+  for (const child of group.children) {
+    if (child.userData.endSign) child.position.x = child.userData.endSign * width / 2;
+    else child.scale.x = scale;
+  }
 }
 
 function buildShard() {
@@ -705,17 +715,7 @@ function spawnPlatform() {
   const p = acquirePlatform();
   if (!p) return;
 
-  // Rebuild geometry to match new width
-  const oldGroup = p.group;
-  while (oldGroup.children.length) {
-    const child = oldGroup.children[0];
-    child.geometry?.dispose();
-    child.material?.dispose();
-    oldGroup.remove(child);
-  }
-  const fresh = buildPlatform(w);
-  while (fresh.children.length) oldGroup.add(fresh.children[0]);
-  oldGroup.userData = fresh.userData;
+  resizePlatform(p.group, w);
 
   p.width    = w;
   p.x        = spawnCursorX;
@@ -758,16 +758,7 @@ function spawnStarter() {
   const p = acquirePlatform();
   if (!p) return 1;
 
-  const oldGroup = p.group;
-  while (oldGroup.children.length) {
-    const child = oldGroup.children[0];
-    child.geometry?.dispose();
-    child.material?.dispose();
-    oldGroup.remove(child);
-  }
-  const fresh = buildPlatform(w);
-  while (fresh.children.length) oldGroup.add(fresh.children[0]);
-  oldGroup.userData = fresh.userData;
+  resizePlatform(p.group, w);
 
   const startY = 1;
   p.width    = w;
@@ -1524,7 +1515,10 @@ function updateMilestone(delta) {
 
 let comboEl = document.getElementById('combo-display');
 
+let lastHUDTime = -1;
 function updateUI() {
+  if (run.seconds >= lastHUDTime && run.seconds - lastHUDTime < .1) return;
+  lastHUDTime = run.seconds;
   document.getElementById('run-time').textContent = `${Math.floor(run.seconds)}s • ${run.streak}/3 FLIP LANDINGS`;
   document.getElementById('district-name').textContent = DISTRICTS[districtBlend(run.seconds).phase];
   document.getElementById('run-message').textContent = run.messageTime > 0 ? run.message : (riderRecord ? `RIDER RECORD: ${riderRecord}s` : 'LAND 3 FLIP JUMPS IN A ROW');
@@ -1602,6 +1596,7 @@ function startGame() {
   resetWorld();
   resetScore();
   run = createRun();
+  lastHUDTime = -1;
   updateUI();
   consumeInput();
   lastTime = performance.now();
@@ -1745,7 +1740,6 @@ function update(delta) {
     consumeInput();
     updateParticles(delta);
     updateShake(delta);
-    renderer.render(scene, camera);
     return;
   }
 

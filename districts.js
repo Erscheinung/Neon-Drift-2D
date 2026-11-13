@@ -4,20 +4,26 @@ export function createDistricts() {
   const canvas = document.getElementById('district-canvas');
   const ctx = canvas.getContext('2d');
   let width = 0, height = 0;
+  let lastDraw = -Infinity;
   function resize() {
     width = innerWidth; height = innerHeight;
-    const dpr = Math.min(devicePixelRatio, 1.5);
+    const dpr = Math.min(devicePixelRatio, 1);
     canvas.width = width * dpr; canvas.height = height * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    lastDraw = -Infinity;
   }
   addEventListener('resize', resize); resize();
   function line(x, y, a, b) { ctx.moveTo(x, y); ctx.lineTo(a, b); }
   return function draw(seconds, distance) {
+    const now = performance.now();
+    if (now - lastDraw < 1000 / 30) return;
+    lastDraw = now;
     ctx.clearRect(0, 0, width, height);
     const { weights } = districtBlend(seconds);
     ctx.lineWidth = 1;
     // Rooftop details belong to skyline buildings, never detached screen-space glyphs.
     const storm = weights[1];
+    if (storm > 0) {
     ctx.globalAlpha = storm * .035; ctx.fillStyle = '#76b8ff';
     for (let i = 0; i < 3; i++) {
       const x = width * (.15 + i * .34);
@@ -42,6 +48,8 @@ export function createDistricts() {
       }
     }
     ctx.stroke();
+    }
+    if (weights[2] > 0) {
     ctx.globalAlpha = weights[2] * .28; ctx.strokeStyle = '#ad72db';
     for (let i = 0; i < 4; i++) {
       const x = ((i * 390 - distance * 5) % (width + 400) + width + 400) % (width + 400) - 200;
@@ -55,6 +63,7 @@ export function createDistricts() {
       }
       ctx.moveTo(x - 160, y + 60); ctx.bezierCurveTo(x - 90, y - 110, x + 90, y - 110, x + 160, y + 60);
       ctx.stroke();
+    }
     }
     ctx.globalAlpha = 1;
   };

@@ -90,3 +90,19 @@ test('overlay press does not capture a pointer; outside release and blur clear h
   assert.equal(input.held, false);
   assert.equal(input.justPressed, false);
 });
+
+test('pooled platforms retain collision-aligned bounds and fixed end caps across reuse', () => {
+  const context = {};
+  vm.runInNewContext(game.slice(game.indexOf('function resizePlatform('), game.indexOf('function buildShard()')), context);
+  const deck = { userData: {}, scale: { x: 1 } };
+  const caps = [-1, 1].map(endSign => ({ userData: { endSign }, position: { x: 0 }, scale: { x: 1 } }));
+  const group = { children: [deck, ...caps] };
+  for (const width of [12, 2.4, 8, 3.4, 5, 2.4]) {
+    context.resizePlatform(group, width);
+    assert.ok(Math.abs(5 * deck.scale.x - width) < 1e-10);
+    assert.equal(caps[0].position.x, -width / 2);
+    assert.equal(caps[1].position.x, width / 2);
+    assert.equal(caps[0].scale.x, 1);
+    assert.equal(group.children[0], deck);
+  }
+});
