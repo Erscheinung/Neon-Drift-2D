@@ -1,10 +1,11 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js';
 import audio from './audio.js';
 import { showLeaderboard, closeLeaderboard, fetchGlobalBest, setLeaderboardPlayAgainHandler, getPlayerName, setPlayerName } from './highscore.js';
-import { initSkyline } from './skyline.js';
 import { createRun, tickRun, recordLanding, districtBlend, DISTRICTS } from './progression.mjs';
+import { motionProfile, platformOffset } from './platform-motion.mjs';
 import { createDistricts } from './districts.js';
 const drawDistricts = createDistricts();
+drawDistricts(0, 0);
 let run = createRun();
 let riderRecord = 0;
 try { riderRecord = Number(localStorage.getItem('neondrift_rider_seconds')) || 0; } catch {}
@@ -450,6 +451,8 @@ let   spawnCursorX   = 8;
 let   lastPlatformY  = 1;
 let   scrollSpeed    = INITIAL_SCROLL;
 let   totalDistance  = 0;
+let platformSerial = 0;
+let standingPlatform = null;
 
 for (let i = 0; i < POOL_SIZE; i++) {
   const plat = {
@@ -521,7 +524,7 @@ for (let i = 0; i < SHARD_POOL_SIZE; i++) {
 
 // City skyline is a CSS backdrop (see index.html + skyline.js) rendered behind
 // the transparent canvas. Kick off its crossfade cycle.
-initSkyline();
+// District panoramas own the backdrop; do not run a second skyline render loop.
 
 // Mid fog strips
 const fogStrips = [];
@@ -683,6 +686,8 @@ function acquirePlatform() {
   if (!p) return null;
   activePlatforms.push(p);
   p.active = true;
+  p.hasObstacle = false;
+  p.motion = motionProfile(platformSerial++);
   p.group.visible = true;
   return p;
 }
@@ -720,6 +725,7 @@ function spawnPlatform() {
   p.width    = w;
   p.x        = spawnCursorX;
   p.y        = lastPlatformY;
+  p.baseY    = lastPlatformY;
   p.surfaceY = lastPlatformY + 0.2; // top of box (h=0.4, center at y)
   p.group.position.set(p.x + w / 2, p.y, 0);
 
@@ -764,6 +770,8 @@ function spawnStarter() {
   p.width    = w;
   p.x        = BIKE_SCREEN_X - 3; // extends behind and ahead of the bike
   p.y        = startY;
+  p.baseY    = startY;
+  p.motion.enabled = false;
   p.surfaceY = startY + 0.2;
   p.group.position.set(p.x + w / 2, p.y, 0);
 
@@ -795,6 +803,7 @@ function spawnObstacle(platform) {
   const obs = pickObstacle(difficulty());
   if (!obs) return;
 
+  platform.hasObstacle = true;
   const useDrone = obs.type === 'drone';
   obs.active = true;
   obs.group.visible = true;
@@ -859,6 +868,16 @@ function updateWorld(delta) {
   // Move platforms
   for (let i = activePlatforms.length - 1; i >= 0; i--) {
     const p = activePlatforms[i];
+    p.prevSurfaceY = p.surfaceY;
+    const offset = p.hasObstacle ? 0 : platformOffset(run.seconds, p.motion, p.baseY, PLATFORM_Y_MIN, PLATFORM_Y_MAX);
+    p.y = p.baseY + offset;
+    p.surfaceY = p.y + .2;
+    const rise = p.surfaceY - p.prevSurfaceY;
+    if (standingPlatform === p && physics.isGrounded) {
+      physics.y += rise;
+      physics.prevY += rise;
+    }
+    p.group.position.y = p.y;
     p.x -= move;
     p.group.position.x = p.x + p.width / 2;
     if (p.x + p.width < -15) {
@@ -942,6 +961,7 @@ function checkCollisions() {
   const bikeTop    = physics.y + BIKE_HH;
 
   physics.isGrounded = false;
+  standingPlatform = null;
   physics._landedThisFrame = false;
   for (const p of activePlatforms) {
     const platLeft  = p.x;
@@ -954,13 +974,14 @@ function checkCollisions() {
       // static window. Land if descending and the bottom edge crossed platTop
       // this frame, or is resting within a small tolerance above it.
       const prevBottom = physics.prevY - BIKE_HH;
-      const crossed    = prevBottom >= platTop - 0.05 && bikeBottom <= platTop + 0.1;
+      const crossed    = prevBottom >= (p.prevSurfaceY ?? platTop) - 0.05 && bikeBottom <= platTop + 0.1;
       const resting    = bikeBottom <= platTop + 0.1 && bikeBottom >= platTop - 0.6;
       if (physics.vy <= 0 && (crossed || resting)) {
         physics.y         = platTop + BIKE_HH;
         const impact      = physics.vy;
         physics.vy        = 0;
         physics.isGrounded = true;
+        standingPlatform = p;
         physics.coyote    = 0;
         physics.airTime   = 0;
         physics._landedThisFrame = true;
@@ -1632,6 +1653,8 @@ function triggerDeath() {
 }
 
 function resetWorld() {
+  standingPlatform = null;
+  platformSerial = 0;
   // Release all active platforms
   for (let i = activePlatforms.length - 1; i >= 0; i--) {
     releasePlatform(activePlatforms[i]);

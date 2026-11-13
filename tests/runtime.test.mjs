@@ -106,3 +106,20 @@ test('pooled platforms retain collision-aligned bounds and fixed end caps across
     assert.equal(group.children[0], deck);
   }
 });
+
+test('moving decks carry grounded riders, leave airborne riders alone and keep hazards fixed', () => {
+  const p = {x:-4,width:5,y:1,baseY:1,surfaceY:1.2,motion:{},hasObstacle:false,group:{position:{x:0,y:1}}};
+  const context = { activePlatforms:[p], activeObstacles:[], activeShards:[], standingPlatform:p,
+    scrollSpeed:8,SCROLL_MAX:30,SCROLL_ACCEL:.05,totalDistance:0,spawnCursorX:100,
+    PLATFORM_Y_MIN:-1,PLATFORM_Y_MAX:2.5,run:{seconds:14},
+    physics:{y:1.5,prevY:1.5,isGrounded:true,forwardBonus:0},platformOffset:()=>.2 };
+  vm.runInNewContext(game.slice(game.indexOf('function updateWorld(delta)'),game.indexOf('// Initial terrain fill')),context);
+  context.updateWorld(1/60);
+  assert.ok(Math.abs(context.physics.y-1.7)<1e-10);
+  assert.ok(Math.abs(p.surfaceY-(p.group.position.y+.2))<1e-10);
+  context.physics.isGrounded=false; context.platformOffset=()=>-.2;
+  context.updateWorld(1/60);
+  assert.ok(Math.abs(context.physics.y-1.7)<1e-10,'jumping rider must not be dragged by deck');
+  p.hasObstacle=true; context.updateWorld(1/60);
+  assert.equal(p.y,p.baseY);
+});
