@@ -10,6 +10,8 @@
 // cheaply each frame). No three.js. Ambient — never reads game state.
 // ============================================================
 
+import { districtBlend } from './progression.mjs';
+
 import {
   createAmbientState,
   updateCrows, drawCrows,
@@ -219,10 +221,15 @@ function generateSky(viewW, viewH) {
 // ========================================================================
 // Main entry point.
 // ========================================================================
-export function initSkyline() {
+export function initSkyline(getSeconds = () => 0) {
   const canvas = document.getElementById('skyline-canvas');
   if (!canvas) return;
-  const ctx = canvas.getContext('2d');
+  let ctx = canvas.getContext('2d');
+  const output = ctx;
+  let sceneBuffer;
+  let districtLayers = [];
+  let allLayers = [];
+  let district = 0;
   if (!ctx) return;
 
   let dpr = 1;
@@ -235,7 +242,7 @@ export function initSkyline() {
   let ambient = null;
 
   function resize() {
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     viewW = window.innerWidth;
     viewH = window.innerHeight;
     canvas.width = Math.round(viewW * dpr);
@@ -246,18 +253,37 @@ export function initSkyline() {
 
     waterTop = viewH * (1 - WATER_FRACTION);
     skyHeight = waterTop; // buildings stand on the waterline
-    layers = LAYERS.map((cfg) => generateLayer(cfg, viewW, skyHeight));
+    // A is the original configuration, untouched. B/C inherit its same architecture grammar.
+    districtLayers = [0, 1, 2].map(kind => LAYERS.map(cfg => generateLayer(kind === 0 ? cfg : {
+      ...cfg,
+      accents: kind === 1 ? [NEON.cyan, NEON.teal, NEON.purple] : [NEON.purple, NEON.magenta, NEON.amber],
+      widthRange: cfg.widthRange.map(v => Math.round(v * (kind === 1 ? 1.2 : 1.4))),
+      heightRange: cfg.heightRange.map(v => v * (kind === 1 ? .9 : 1.08)),
+      gap: kind === 2 ? [10, 22] : cfg.gap,
+    }, viewW, skyHeight)));
+    allLayers = districtLayers.flat();
+    layers = districtLayers[0];
+    sceneBuffer = document.createElement('canvas');
+    sceneBuffer.width = canvas.width; sceneBuffer.height = canvas.height;
     sky = generateSky(viewW, viewH);
     ambient = createAmbientState(viewW, viewH);
+    // Warm bounded sprite caches at resize, never on a district transition.
+    ctx = sceneBuffer.getContext('2d');
+    for (district=1; district<3; district++) {
+      for (const layer of districtLayers[district]) {
+        for (const b of layer.buildings) drawBuilding(b, 0, layer.cfg, 0);
+      }
+    }
+    district=0;ctx=output;
   }
 
   // --- Drawing routines -------------------------------------------------
 
   function drawSky() {
     const g = ctx.createLinearGradient(0, 0, 0, skyHeight);
-    g.addColorStop(0, SKY_TOP);
-    g.addColorStop(0.55, SKY_MID);
-    g.addColorStop(1, SKY_HORIZON);
+    g.addColorStop(0, district === 0 ? SKY_TOP : district === 1 ? '#030e20' : '#10051c');
+    g.addColorStop(0.55, district === 0 ? SKY_MID : district === 1 ? '#132d42' : '#321034');
+    g.addColorStop(1, district === 0 ? SKY_HORIZON : district === 1 ? '#285062' : '#512344');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, viewW, skyHeight);
 
@@ -316,7 +342,7 @@ export function initSkyline() {
 
   // Draw one building at an absolute x. Reused for both city + reflection
   // (reflection flips via ctx transform before calling).
-  function drawBuilding(b, x, cfg, t) {
+  function drawBuildingBase(b, x, cfg, t) {
     const body = desaturate('#0d0518', cfg.saturation < 1 ? 0.6 : 0.85);
     // Silhouette body.
     ctx.fillStyle = body;
@@ -375,6 +401,71 @@ export function initSkyline() {
       ctx.arc(ax, ayTop, cfg.detail >= 1 ? 2.5 : 1.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
+    }
+  }
+
+  function drawBuilding(b, x, cfg, t) {
+    if (district === 0) { drawBuildingBase(b, x, cfg, t); return; }
+    // Bake windows, glow, facade ribs and roof infrastructure once per building.
+    // The same sprite is reused in the reflected water pass.
+    const pad = 64;
+    if (!b.sprite) {
+      b.sprite = document.createElement('canvas');
+      b.spriteTop = Math.max(0, b.top - Math.max(b.step?.h || 0, b.antenna?.height || 0, 48) - 8);
+      b.sprite.width = Math.ceil(b.w + pad * 2);
+      b.sprite.height = Math.ceil(skyHeight - b.spriteTop + 8);
+      const previous = ctx;
+      ctx = b.sprite.getContext('2d'); ctx.translate(0,-b.spriteTop);
+      drawBuildingBase(b, pad, cfg, 0);
+      ctx.strokeStyle = rgba(b.accent, cfg.alpha * .65); ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (district === 1) {
+        // Rooftop station canopies and facade conduits; always rooted in architecture.
+        const y = b.top - 12;
+        ctx.moveTo(pad, b.top);ctx.lineTo(pad + 8,y);ctx.lineTo(pad+b.w-8,y);ctx.lineTo(pad+b.w,b.top);
+        for(let i=1;i<5;i++) {const xx=pad+i*b.w/5;ctx.moveTo(xx,y);ctx.lineTo(xx,b.top);}
+        for(let i=1;i<3;i++) {const xx=pad+i*b.w/3;ctx.moveTo(xx,b.top+8);ctx.lineTo(xx,b.top+b.h);}
+      } else {
+        // Heavy industrial roof vaults, turbine housings and segmented cooling fins.
+        const r = Math.min(b.w*.32,38), cx=pad+b.w/2, cy=b.top;
+        ctx.moveTo(cx+r,cy);ctx.arc(cx,cy,r,Math.PI,Math.PI*2);
+        ctx.moveTo(cx+r-5,cy);ctx.arc(cx,cy,r-5,Math.PI,Math.PI*2);
+        for(let yy=b.top+12;yy<b.top+b.h;yy+=24) {ctx.moveTo(pad+3,yy);ctx.lineTo(pad+b.w-3,yy);}
+        ctx.moveTo(pad+b.w*.15,b.top);ctx.lineTo(pad+b.w*.15,b.top-26);ctx.lineTo(pad+b.w*.38,b.top-26);
+      }
+      ctx.stroke();ctx=previous;
+    }
+    ctx.drawImage(b.sprite,x-pad,b.spriteTop);
+  }
+
+  function drawInfrastructure(t) {
+    if (district === 0) return;
+    const mid=districtLayers[district][1];
+    const y=skyHeight*(district === 1 ? .5 : .38);
+    ctx.lineWidth=1;
+    if(district === 1) {
+      // Two continuous elevated lines with luminous carriage windows and slender pylons.
+      for(let tier=0;tier<2;tier++) {
+        const yy=y+tier*skyHeight*.17;
+        ctx.fillStyle='#0a1224';ctx.fillRect(0,yy,viewW,9);
+        ctx.strokeStyle='rgba(63,170,190,.35)';ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(viewW,yy);ctx.stroke();
+        for(let x=-((mid.offset*1.3)%180);x<viewW;x+=180) {
+          ctx.fillStyle='#12172b';ctx.fillRect(x,yy,5,skyHeight-yy);
+          ctx.strokeStyle='rgba(83,116,166,.3)';ctx.beginPath();ctx.moveTo(x-40,yy);ctx.lineTo(x,yy+38);ctx.lineTo(x+40,yy);ctx.stroke();
+        }
+        const train=((t*(tier?-28:36))%(viewW+220)+viewW+220)%(viewW+220)-220;
+        ctx.fillStyle='#17233b';ctx.fillRect(train,yy-13,145,11);
+        ctx.fillStyle='rgba(99,224,232,.5)';for(let j=0;j<18;j++)ctx.fillRect(train+5+j*8,yy-10,4,3);
+      }
+    } else {
+      for(let x=-(mid.offset%360);x<viewW+180;x+=360) {
+        ctx.lineWidth=13;ctx.strokeStyle='#170e23';ctx.beginPath();ctx.moveTo(x-130,skyHeight);ctx.bezierCurveTo(x-130,skyHeight*.08,x+130,skyHeight*.08,x+130,skyHeight);ctx.stroke();
+        ctx.lineWidth=1;ctx.strokeStyle='rgba(156,68,155,.35)';ctx.stroke();
+        const cy=skyHeight*.38, r=45;
+        ctx.fillStyle='#100c20';ctx.beginPath();ctx.arc(x,cy,r,0,Math.PI*2);ctx.fill();ctx.stroke();
+        ctx.strokeStyle='rgba(114,108,186,.45)';ctx.beginPath();
+        for(let blade=0;blade<6;blade++){const a=t*.23+blade*Math.PI/3;ctx.moveTo(x+Math.cos(a)*8,cy+Math.sin(a)*8);ctx.lineTo(x+Math.cos(a+.3)*37,cy+Math.sin(a+.3)*37);}ctx.stroke();
+      }
     }
   }
 
@@ -456,13 +547,18 @@ export function initSkyline() {
   let last = performance.now();
 
   function frame(now) {
+    requestAnimationFrame(frame);
+    if (document.hidden) { last = now; return; }
+    // The decorative backdrop needs only 30 fps; reserve time for game input
+    // and foreground physics, which still update on every animation frame.
+    if (now - last < 1000 / 30) return;
     let dt = (now - last) / 1000;
     last = now;
     if (dt > 0.1) dt = 0.1; // clamp after tab-switch / stalls
     const t = now / 1000;
 
     // Advance scroll + drift.
-    for (const layer of layers) {
+    for (const layer of allLayers) {
       layer.offset = (layer.offset + layer.cfg.speed * dt) % layer.stripWidth;
     }
     sky.moon.drift += dt * 1.5;
@@ -470,18 +566,23 @@ export function initSkyline() {
     updateCrows(ambient, dt, t, viewW, viewH);
     updateWind(ambient, dt, t, viewW, viewH);
 
-    ctx.clearRect(0, 0, viewW, viewH);
-    drawSky();
-    drawStars(t);
-    drawMoon();
-    drawClouds();
-    drawWind(ctx, ambient);
-    drawCrows(ctx, ambient, t);
-    for (const layer of layers) drawLayer(layer, t);
-    drawWater(t);
-    drawOverlay();
+    const {weights}=districtBlend(getSeconds());
+    output.clearRect(0,0,viewW,viewH);
+    for(district=0;district<3;district++) {
+      if(weights[district] === 0) continue;
+      layers=districtLayers[district];
+      ctx=sceneBuffer.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);
+      ctx.clearRect(0,0,viewW,viewH);
+      drawSky();drawStars(t);drawMoon();drawClouds();
+      drawWind(ctx,ambient);drawCrows(ctx,ambient,t);
+      for(const layer of layers) drawLayer(layer,t);
+      drawInfrastructure(t);
+      drawWater(t);drawOverlay();
+      output.globalCompositeOperation='lighter';output.globalAlpha=weights[district];
+      output.drawImage(sceneBuffer,0,0,viewW,viewH);
+    }
+    output.globalAlpha=1;output.globalCompositeOperation='source-over';ctx=output;
 
-    requestAnimationFrame(frame);
   }
 
   resize();
